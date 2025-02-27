@@ -42,6 +42,7 @@ class YarnSimulation:
         # Components
         self.path = None              # Will hold the central path points
         self.strands = None           # Will hold the strand points
+        self.initial_frame = None     # Will store the initial coordinate frame for consistency
 
     def set_yarn_path(self, path):
         """set the path of this yarn"""
@@ -67,6 +68,127 @@ class YarnSimulation:
             self.__generate_single_strand_along_path(i)
         
         return self
+    
+    def __create_consistent_frames(self):
+        """
+        Create consistent coordinate frames along the path using parallel transport.
+        This prevents sudden flips in orientation as the path curves.
+        Works for arbitrary paths in 3D space, not limited to any specific plane.
+        """
+        path_points = len(self.path)
+        frames = []
+        
+        # Initialize the first frame
+        if path_points <= 1:
+            return [{'forward': np.array([1, 0, 0]), 'up': np.array([0, 1, 0]), 'right': np.array([0, 0, 1])}]
+        
+        # Get the initial forward direction
+        forward = self.path[1] - self.path[0]
+        forward_length = np.linalg.norm(forward)
+        if forward_length > 0:
+            forward = forward / forward_length
+        
+        # Choose a consistent initial up vector that works for any path in 3D space
+        # We'll use the method of least-changing up vector
+        
+        # Start with a default up vector
+        default_up = np.array([0, 1, 0])
+        
+        # If forward is too closely aligned with the default up vector,
+        # choose a different default
+        if abs(np.dot(forward, default_up)) > 0.9:
+            default_up = np.array([0, 0, 1])
+            # If still too aligned, use x-axis
+            if abs(np.dot(forward, default_up)) > 0.9:
+                default_up = np.array([1, 0, 0])
+        
+        # Make the up vector perpendicular to forward
+        up = default_up - forward * np.dot(forward, default_up)
+        up_length = np.linalg.norm(up)
+        if up_length > 0:
+            up = up / up_length
+        
+        # Complete the orthonormal basis
+        right = np.cross(forward, up)
+        
+        frames.append({'forward': forward, 'up': up, 'right': right})
+        
+        # Now propagate this frame along the path using parallel transport
+        for i in range(1, path_points):
+            prev_forward = frames[i-1]['forward']
+            prev_up = frames[i-1]['up']
+            prev_right = frames[i-1]['right']
+            
+            # Calculate new forward direction
+            if i < path_points - 1:
+                new_forward = self.path[i+1] - self.path[i]
+            else:
+                new_forward = self.path[i] - self.path[i-1]
+                
+            new_forward_length = np.linalg.norm(new_forward)
+            if new_forward_length > 0:
+                new_forward = new_forward / new_forward_length
+            
+            # Calculate the rotation from previous forward to new forward
+            rotation_axis = np.cross(prev_forward, new_forward)
+            axis_length = np.linalg.norm(rotation_axis)
+            
+            if axis_length > 1e-10:  # If the directions are not parallel
+                # Normalize rotation axis
+                rotation_axis = rotation_axis / axis_length
+                
+                # Calculate rotation angle
+                cos_angle = np.dot(prev_forward, new_forward)
+                cos_angle = np.clip(cos_angle, -1.0, 1.0)  # Ensure within valid range
+                angle = np.arccos(cos_angle)
+                
+                # Rotate previous up and right vectors around rotation_axis by angle
+                new_up = self.__rotate_vector(prev_up, rotation_axis, angle)
+                new_right = self.__rotate_vector(prev_right, rotation_axis, angle)
+            else:
+                # Vectors are parallel, no rotation needed
+                new_up = prev_up
+                new_right = prev_right
+            
+            # Ensure the new frame is orthonormal
+            new_right = np.cross(new_forward, new_up)
+            new_up = np.cross(new_right, new_forward)
+            
+            # Normalize
+            new_up = new_up / np.linalg.norm(new_up)
+            new_right = new_right / np.linalg.norm(new_right)
+            
+            frames.append({'forward': new_forward, 'up': new_up, 'right': new_right})
+        
+        return frames
+    
+    def __rotate_vector(self, v, axis, angle):
+        """
+        Rotate vector v around axis by angle using Rodrigues' rotation formula.
+        Handles numerical precision issues and special cases.
+        """
+        # Ensure the axis is normalized
+        axis_norm = np.linalg.norm(axis)
+        if axis_norm < 1e-10:
+            return v  # No rotation if axis is too small
+            
+        axis = axis / axis_norm
+        
+        cos_angle = np.cos(angle)
+        sin_angle = np.sin(angle)
+        
+        # Handle special cases for numerical stability
+        if abs(sin_angle) < 1e-10:
+            if cos_angle > 0:
+                return v  # No rotation
+            else:
+                # 180-degree rotation
+                return v - 2 * (np.dot(v, axis) * axis)
+                
+        # Rodrigues' rotation formula
+        return (v * cos_angle + 
+                np.cross(axis, v) * sin_angle + 
+                axis * np.dot(axis, v) * (1 - cos_angle))
 
     def __generate_single_strand_along_path(self, strand_index):
         """
@@ -91,12 +213,15 @@ class YarnSimulation:
         strand_angle_interval = 2 * math.pi / self.strand_count
         strand_offset_angle = strand_index * strand_angle_interval
 
+        # Calculate distance from yarn center to strand center
         yarn_center_to_strand_center_dis = self.strand_diameter / 2
         if self.strand_count == 3:
             yarn_center_to_strand_center_dis = self.strand_diameter / np.sqrt(3)
-        elif  self.strand_count == 4:
+        elif self.strand_count == 4:
             yarn_center_to_strand_center_dis = self.strand_diameter / np.sqrt(2)
-
+        
+        # Create consistent coordinate frames along the path
+        frames = self.__create_consistent_frames()
         
         # Generate each point on the strand
         for i in range(path_points):
@@ -107,69 +232,11 @@ class YarnSimulation:
             angle = 2 * math.pi * self.twist_rate * distance
             total_angle = angle + strand_offset_angle
             
-            # Calculate direction vectors for local coordinate system
-            if i < path_points - 1:
-                forward = self.path[i+1] - center
-            else:
-                # forward = center - self.path[i-1] if i > 0 else np.array([1, 0, 0])
-                forward = np.array([1,0,0])
+            # Get the local coordinate system from the frame
+            frame = frames[i]
+            right = frame['right']
+            up = frame['up']
             
-            # Normalize forward vector
-            forward_length = np.linalg.norm(forward)
-            if forward_length > 0:
-                forward = forward / forward_length
-            
-            # Calculate perpendicular vectors (right and up)
-
-            if forward[1] == 0:
-                up = np.array([0,1,0])
-                right = np.cross(forward, up)
-                if np.linalg.norm(right) :
-                    right = right / np.linalg.norm(right)
-                # if right[0] < 0: right = -right
-
-            elif forward[0] == 0:
-                right = np.array([1,0,0])
-                up = np.cross(forward, right)
-                if np.linalg.norm(up) :
-                    up = up / np.linalg.norm(up)
-                if up[1] <0: up  = -up
-            else: 
-                if abs(forward[1]) > 0.001 or abs(forward[2]) > 0.001:
-                    up = np.array([0, -forward[2], forward[1]])
-                else:
-                    up = np.array([0, 1, 0])
-                up = up / np.linalg.norm(up)
-                
-                # #  third perpendicular vector
-                right = np.cross(forward, up)
-
-
-            # if abs(forward[0]) < 0.999:  # Not aligned with X axis
-            #     # Create a vector perpendicular to forward in the XZ plane
-            #     # up = np.array([0, -forward[2], forward[1]])  # Start with Y axis
-            #     up = np.array([0, 1, 0])  # Start with Y axis
-            #     up = up - forward * np.dot(forward, up)
-            #     # print(f"after up:{up}")
-            #     up = up / np.linalg.norm(up)
-
-            #     # z always pos
-            #     if (up[1] < 0): up = -up
-                
-            #     right = np.cross(forward, up)
-            #     if np.linalg.norm(right) :
-            #         right = right / np.linalg.norm(right)
-
-            #     # y alwyas pos
-            #     if (right[2]<0): right = -right
-            
-            # else:
-            #     # If aligned with X axis, use Z axis as up
-            #     up = np.array([0,0,1])
-            #     right = np.array([0,1,0])
-            
-            # print(f"total_angle: {total_angle}, cos: {math.cos(total_angle)}, sin: {math.sin(total_angle)}, forward:{forward} up:{up}, right: {right}")
-            # print(f"center: {center}, right contribution: {right * math.cos(total_angle)}, up contributrion: {up * math.sin(total_angle)}")
             # Calculate strand position at this point
             offset = yarn_center_to_strand_center_dis * (right * math.cos(total_angle) + up * math.sin(total_angle))
             point = center + offset
@@ -190,7 +257,10 @@ class YarnSimulation:
         faces = []
         vertex_index = 0 # init
         
-        # create for each strand tube
+        # Create consistent coordinate frames along the path
+        frames = self.__create_consistent_frames()
+        
+        # Create for each strand tube
         for strand in self.strands:
             if strand is None:
                 continue
@@ -199,41 +269,13 @@ class YarnSimulation:
             radius = self.strand_diameter / 2 * self.packing_density
             
             for i in range(len(strand)):
-                # Calculate direction vector
-                if i < len(strand) - 1:
-                    direction = strand[i+1] - strand[i]
-                else:
-                    direction = strand[i] - strand[i-1] if i > 0 else np.array([1, 0, 0])
-                # print(f"direction vector: {direction}")
-
-                # normalize
-                direction_length = np.linalg.norm(direction)
-                if direction_length > 0:
-                    direction = direction / direction_length
-
-                if direction[1] == 0:
-                    up = np.array([0,1,0])
-                    right = np.cross(direction, up)
-                    if np.linalg.norm(right) :
-                        right = right / np.linalg.norm(right)
-                    perpendicular, third = up, right
-                elif direction[0] == 0:
-                    right = np.array([1,0,0])
-                    up = np.cross(direction, right)
-                    if np.linalg.norm(up) :
-                        up = up / np.linalg.norm(up)
-                    perpendicular, third = up, right
-                else: 
-                    if abs(direction[1]) > 0.001 or abs(direction[2]) > 0.001:
-                        perpendicular = np.array([0, -direction[2], direction[1]])
-                    else:
-                        perpendicular = np.array([0, 1, 0])
-                    perpendicular = perpendicular / np.linalg.norm(perpendicular)
-                    
-                    # #  third perpendicular vector
-                    third = np.cross(direction, perpendicular)
-
-                #  vertice on ring
+                # Get the local coordinate system from the frames
+                frame = frames[i]
+                direction = frame['forward']
+                perpendicular = frame['up']
+                third = frame['right']
+                
+                # Create vertices on ring
                 for j in range(self.vertices_per_ring):
                     angle = j * (2 * math.pi / self.vertices_per_ring)
                     dx = radius * (perpendicular[0] * math.cos(angle) + third[0] * math.sin(angle))
