@@ -2,7 +2,7 @@
     "default_weft": {
         "color": [0.0, 1.0, 0.0],
         "strand_diameter": 1,
-        "strand_count": 3,
+        "strand_count": 4,
         "tension": 0.5
     },
     "default_warp": {

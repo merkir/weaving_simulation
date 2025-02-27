@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from yarn_simulatior import YarnSimulation
 import scipy.interpolate as interpolate
 
+# TODO:
+# 1. compacted
+# 2. double cloth
 
 class FabricSimulation:
     def __init__(self, pattern_data, weft_yarns, warp_yarns):
@@ -23,7 +26,7 @@ class FabricSimulation:
         self.weft_spacing_factor = 1     # packedness between weft yarns, 1 to inf
         self.warp_spacing_factor = 1     # packedness between warp yarns, 1 for exactly spaced without compression
         self.control_points_per_turning = 8   # smoothness of turning
-        self.compress_fractor = 1.3
+        self.compress_fractor = 1.1
          
         # Components
         self.pattern = np.array(pattern_data, dtype=int)
@@ -64,6 +67,7 @@ class FabricSimulation:
             warp_centers_x.append(next_center)
         
         # positions of weft yarns along y-axis
+        # TODO: support double/.. cloth
         weft_centers_y = [0]
         for i in range(self.weft_count-1):
             next_center = weft_centers_y[-1] + (self.weft_yarns[i].yarn_diameter/2 + max_warp_diameter + 
@@ -107,15 +111,27 @@ class FabricSimulation:
         # self.__set_yarn_paths(self.weft_paths_centers, self.weft_yarns, np.array([1,0,0]))
         # self.__set_yarn_paths(self.warp_paths_centers, self.warp_yarns, np.array([0,1,0]))
 
+    def __smoothen_line_segment(self, start, end):
+        line_segment = end - start
+        smooth_segment = []
+        for i in range(1, self.control_points_per_turning):
+            alph = i / self.control_points_per_turning 
+            smooth_segment.append(start +  alph * line_segment)
+        return smooth_segment
+
+
     def __add_extra_start_and_end(self, path_centers, yarn_diameter, direction):
+
         first = path_centers[0]
         start = first - direction *2* yarn_diameter
-    
+        start_segment = self.__smoothen_line_segment(start, first)
+
         # end
         last = path_centers[-1]
         end = last + direction * 2* yarn_diameter
+        end_segment = self.__smoothen_line_segment(last, end)
 
-        return [start] + path_centers + [end]
+        return start_segment + path_centers + end_segment
 
     def __smoothen_and_set_paths(self):
         self.weft_paths = [[] for _ in range(self.weft_count)]
@@ -125,7 +141,6 @@ class FabricSimulation:
                 if j != 0:
                     weft_segment = self.__generate_smooth_weft_segment(i,j)
                     self.weft_paths[i].extend(weft_segment)
-            print(f"weft_paths[i]: {self.weft_paths[i]} ")
             self.weft_paths[i] = self.__add_extra_start_and_end(self.weft_paths[i], self.weft_yarns[i].yarn_diameter, np.array([1,0,0]))
             self.weft_yarns[i].set_yarn_path(self.weft_paths[i])
 
@@ -138,10 +153,20 @@ class FabricSimulation:
                     warp_segment = self.__generate_smooth_warp_segment(i,j)
                     self.warp_paths[j].extend(warp_segment)
 
-            # add extra start and end
-            print(f"warp_paths[j]: {self.warp_paths[j]} ")
             self.warp_paths[j] = self.__add_extra_start_and_end(self.warp_paths[j], self.warp_yarns[j].yarn_diameter, np.array([0,1,0]))
             self.warp_yarns[j].set_yarn_path(self.warp_paths[j])
+
+        print("----debug---")
+        print(f"control grid: {self.control_grid}")
+        print("")
+        for i in range(self.weft_count):
+            print(f"** weft_path_centers {i}: {self.weft_paths_centers[i]})")
+            print(f"** weft_path {i}: {[tuple([float(coord) for coord in point] ) for point in self.weft_paths[i]]}")
+            print("")
+        for j in range(self.warp_count):
+            print(f"** warp_path_centers {j}: {self.warp_paths_centers[j]})")
+            print(f"** warp_path {j}: {[tuple([float(coord) for coord in point] ) for point in self.warp_paths[i]]}")
+            print("")
 
     def __generate_smooth_warp_segment(self, i,j):
 
@@ -151,19 +176,17 @@ class FabricSimulation:
         prev_weft_center, curr_weft_center = self.weft_paths_centers[i-1][j], self.weft_paths_centers[i][j]
 
         if prev_pattern == curr_pattern:
-            raise ValueError("currently not supported, sorry!")
+            raise ValueError("currently not supported!")
     
         warp_radius = self.warp_yarns[i].yarn_diameter/2
         prev_weft_radius, current_weft_radius = self.weft_yarns[i-1].yarn_diameter/2, self.weft_yarns[i].yarn_diameter/2
         
-        rA, rB = prev_weft_radius + warp_radius, current_weft_radius + warp_radius
+        rA, rB = (prev_weft_radius + warp_radius)/self.compress_fractor , (current_weft_radius + warp_radius)/self.compress_fractor 
         forward = curr_weft_center - prev_weft_center
-        forward_norm = np.linalg.norm(forward)
+        forward_norm = np.linalg.norm(forward/self.compress_fractor )
         theta = math.acos((rA +rB)/forward_norm)
 
-        print(f"prev_warp_center: {prev_weft_center}, curr_warp_center: {curr_weft_center}, forward: {forward}, rA, rB : {rA}, {rB}")
-
-        if prev_pattern == 1:
+        if prev_pattern == 0:
             # warp under -> top
             forward_angle = math.acos(-forward[2] / forward_norm) # angle between forward vector and (0,0,-1)
         else:
@@ -171,48 +194,56 @@ class FabricSimulation:
             forward_angle = math.acos(forward[2] / forward_norm) # angle between forward vector and (0,0,1)
 
         circular_angle = math.pi - theta - forward_angle
-        
-        print(f"theta: {theta}, forward_angle: {forward_angle}, circular_angle: {circular_angle}")
 
-        compressed_circular_angle = circular_angle / self.compress_fractor 
+        compressed_circular_angle = circular_angle
 
         # draw control points around the turning
         segment = []
-        offset_angle = 0.01
+        offset_angle = 0
         compressed_circular_angle_slice = compressed_circular_angle / self.control_points_per_turning
 
-        if prev_pattern == 1:
+        if prev_pattern == 0:
             # the half on previous warp
             for i in range(self.control_points_per_turning):
                 point_angle = offset_angle + i * compressed_circular_angle_slice
                 segment_point = prev_weft_center + rA * np.array([ 0, math.sin(point_angle), math.cos(point_angle)])
                 segment.append(segment_point)
-
-                print(f"poin: {segment_point}")
             
-            print("next half")
             # the halp on the next warp
             for i in range(self.control_points_per_turning):
                 point_angle = compressed_circular_angle + offset_angle - i * compressed_circular_angle_slice
                 segment_point = curr_weft_center + rB *  np.array([ 0, -math.sin(point_angle), -math.cos(point_angle)])
+                
+                # middle
+                if i == 0:
+                    middle_start = segment[-1]
+                    middle_segment = segment_point - middle_start
+                    for i in range(1, self.control_points_per_turning):
+                        alph = i / self.control_points_per_turning 
+                        segment.append(middle_start +  alph * middle_segment)
+
                 segment.append(segment_point)
-                print(f"point: {segment_point}")
         else:
             # the half on previous warp
             for i in range(self.control_points_per_turning):
                 point_angle = offset_angle + i * compressed_circular_angle_slice
                 segment_point = prev_weft_center + rA *  np.array([ 0,math.sin(point_angle), -math.cos(point_angle)])
                 segment.append(segment_point)
-
-                print(f"poin: {segment_point}")
             
-            print("next half")
             # the halp on the next warp
             for i in range(self.control_points_per_turning):
                 point_angle = compressed_circular_angle + offset_angle - i * compressed_circular_angle_slice
                 segment_point = curr_weft_center + rB *  np.array([ 0,-math.sin(point_angle), math.cos(point_angle)])
+
+                # middle
+                if i == 0:
+                    middle_start = segment[-1]
+                    middle_segment = segment_point - middle_start
+                    for i in range(1, self.control_points_per_turning):
+                        alph = i / self.control_points_per_turning 
+                        segment.append(middle_start +  alph * middle_segment)
+                        
                 segment.append(segment_point)
-                print(f"point: {segment_point}")
 
 
         return segment
@@ -227,7 +258,7 @@ class FabricSimulation:
         prev_warp_center, curr_warp_center = self.warp_paths_centers[j-1][i], self.warp_paths_centers[j][i]
 
         if prev_pattern == curr_pattern:
-            raise ValueError("currently not supported, sorry!")
+            raise ValueError("currently not supported")
     
         weft_radius = self.weft_yarns[i].yarn_diameter/2
         prev_warp_radius, current_warp_radius = self.warp_yarns[j-1].yarn_diameter/2, self.warp_yarns[j].yarn_diameter/2
@@ -237,7 +268,7 @@ class FabricSimulation:
         forward_norm = np.linalg.norm(forward)
         theta = math.acos((rA +rB)/forward_norm)
 
-        print(f"prev_warp_center: {prev_warp_center}, curr_warp_center: {curr_warp_center}, forward: {forward}, rA, rB : {rA}, {rB}")
+        # print(f"prev_warp_center: {prev_warp_center}, curr_warp_center: {curr_warp_center}, forward: {forward}, rA, rB : {rA}, {rB}")
 
         if prev_pattern == 1:
             # weft top -> under
@@ -248,7 +279,7 @@ class FabricSimulation:
 
         circular_angle = math.pi - theta - forward_angle
         
-        print(f"theta: {theta}, forward_angle: {forward_angle}, circular_angle: {circular_angle}")
+        # print(f"theta: {theta}, forward_angle: {forward_angle}, circular_angle: {circular_angle}")
 
         compressed_circular_angle = circular_angle / self.compress_fractor 
 
@@ -264,31 +295,43 @@ class FabricSimulation:
                 segment_point = prev_warp_center + rA * np.array([math.sin(point_angle), 0, math.cos(point_angle)])
                 segment.append(segment_point)
 
-                print(f"poin: {segment_point}")
-            
-            print("next half")
+            middle_start = segment[-1]
+
             # the halp on the next warp
             for i in range(self.control_points_per_turning):
                 point_angle = compressed_circular_angle + offset_angle - i * compressed_circular_angle_slice
                 segment_point = curr_warp_center + rB *  np.array([-math.sin(point_angle), 0, -math.cos(point_angle)])
+
+                # middle
+                if i == 0:
+                    middle_start = segment[-1]
+                    middle_segment = segment_point - middle_start
+                    for i in range(1, self.control_points_per_turning):
+                        alph = i / self.control_points_per_turning 
+                        segment.append(middle_start +  alph * middle_segment)
+
                 segment.append(segment_point)
-                print(f"point: {segment_point}")
         else:
             # the half on previous warp
             for i in range(self.control_points_per_turning):
                 point_angle = offset_angle + i * compressed_circular_angle_slice
                 segment_point = prev_warp_center + rA *  np.array([math.sin(point_angle), 0, -math.cos(point_angle)])
                 segment.append(segment_point)
-
-                print(f"poin: {segment_point}")
             
-            print("next half")
             # the halp on the next warp
             for i in range(self.control_points_per_turning):
                 point_angle = compressed_circular_angle + offset_angle - i * compressed_circular_angle_slice
                 segment_point = curr_warp_center + rB *  np.array([-math.sin(point_angle), 0, math.cos(point_angle)])
+
+                # middle
+                if i == 0:
+                    middle_start = segment[-1]
+                    middle_segment = segment_point - middle_start
+                    for i in range(1, self.control_points_per_turning):
+                        alph = i / self.control_points_per_turning 
+                        segment.append(middle_start +  alph * middle_segment)
+
                 segment.append(segment_point)
-                print(f"point: {segment_point}")
 
         return segment
 

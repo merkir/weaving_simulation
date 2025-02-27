@@ -2,7 +2,11 @@
     "wefts": [
         "default_weft",
         "default_weft",
-        "thick_weft",
+        "default_weft",
+        "default_weft",
+        "default_weft",
+        "default_weft",
+        "default_weft",
         "default_weft"
     ],
     "warps": [
