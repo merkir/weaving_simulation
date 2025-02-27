@@ -1,0 +1,22 @@
+{
+    "wefts": [
+        "default_weft",
+        "default_weft",
+        "thick_weft",
+        "default_weft"
+    ],
+    "warps": [
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp",
+        "default_warp"
+    ]
+}

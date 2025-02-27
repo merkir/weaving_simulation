@@ -1,0 +1,19 @@
+{
+    "default_weft": {
+        "color": [0.0, 1.0, 0.0],
+        "strand_diameter": 1,
+        "strand_count": 3,
+        "tension": 0.5
+    },
+    "default_warp": {
+        "color": [0.0, 0.0, 1.0],
+        "strand_diameter": 1,
+        "strand_count": 3,
+        "tension": 0.5
+    },
+    "thick_weft": {
+        "color": [0.0, 1.0, 1.0],
+        "strand_diameter": 0.4,
+        "strand_count": 3
+    }
+}
