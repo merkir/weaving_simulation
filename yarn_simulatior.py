@@ -134,7 +134,15 @@ class YarnSimulation:
                 if np.linalg.norm(up) :
                     up = up / np.linalg.norm(up)
                 if up[1] <0: up  = -up
-                    
+            else: 
+                if abs(forward[1]) > 0.001 or abs(forward[2]) > 0.001:
+                    up = np.array([0, -forward[2], forward[1]])
+                else:
+                    up = np.array([0, 1, 0])
+                up = up / np.linalg.norm(up)
+                
+                # #  third perpendicular vector
+                right = np.cross(forward, up)
 
 
             # if abs(forward[0]) < 0.999:  # Not aligned with X axis
@@ -314,7 +322,7 @@ def main():
     os.makedirs("output", exist_ok=True)
     
     # Basic straight yarn
-    yarn = YarnSimulation(strand_diameter=0.4, strand_count=1, color=(0.0, 1.0, 0.0))
+    yarn = YarnSimulation(strand_diameter=0.4, strand_count=3, color=(0.0, 1.0, 0.0))
     # yarn.generate_straight_unit_yarn()
     # yarn.save_yarn_to_obj_file("output/straight_yarn.obj")
     # print("Straight yarn generated successfully")
