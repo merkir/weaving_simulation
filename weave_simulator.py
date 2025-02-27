@@ -4,7 +4,7 @@ import os
 import math
 import json
 from dataclasses import dataclass
-from yarn_simulation import YarnSimulation
+from yarn_simulatior import YarnSimulation
 import scipy.interpolate as interpolate
 
 
@@ -105,8 +105,17 @@ class FabricSimulation:
         self.__smoothen_and_set_paths()
 
         # self.__set_yarn_paths(self.weft_paths_centers, self.weft_yarns, np.array([1,0,0]))
-        self.__set_yarn_paths(self.warp_paths_centers, self.warp_yarns, np.array([0,1,0]))
+        # self.__set_yarn_paths(self.warp_paths_centers, self.warp_yarns, np.array([0,1,0]))
 
+    def __add_extra_start_and_end(self, path_centers, yarn_diameter, direction):
+        first = path_centers[0]
+        start = first - direction *2* yarn_diameter
+    
+        # end
+        last = path_centers[-1]
+        end = last + direction * 2* yarn_diameter
+
+        return [start] + path_centers + [end]
 
     def __smoothen_and_set_paths(self):
         self.weft_paths = [[] for _ in range(self.weft_count)]
@@ -116,10 +125,97 @@ class FabricSimulation:
                 if j != 0:
                     weft_segment = self.__generate_smooth_weft_segment(i,j)
                     self.weft_paths[i].extend(weft_segment)
-                # if i != 0:
-                #     warp_segment = self.__generate_warp_segment(i,j)
             print(f"weft_paths[i]: {self.weft_paths[i]} ")
+            self.weft_paths[i] = self.__add_extra_start_and_end(self.weft_paths[i], self.weft_yarns[i].yarn_diameter, np.array([1,0,0]))
             self.weft_yarns[i].set_yarn_path(self.weft_paths[i])
+
+
+        self.warp_paths = [[] for _ in range(self.warp_count)]
+        for j in range(self.warp_count):
+            for i in range(self.weft_count):
+                # skip the before-first segments
+                if i != 0:
+                    warp_segment = self.__generate_smooth_warp_segment(i,j)
+                    self.warp_paths[j].extend(warp_segment)
+
+            # add extra start and end
+            print(f"warp_paths[j]: {self.warp_paths[j]} ")
+            self.warp_paths[j] = self.__add_extra_start_and_end(self.warp_paths[j], self.warp_yarns[j].yarn_diameter, np.array([0,1,0]))
+            self.warp_yarns[j].set_yarn_path(self.warp_paths[j])
+
+    def __generate_smooth_warp_segment(self, i,j):
+
+        """geneate weft segment form the pervious intersection (i,j-1) to the current one (i-j)"""
+        prev_pattern, curr_pattern =  self.pattern[i-1][j], self.pattern[i][j]
+
+        prev_weft_center, curr_weft_center = self.weft_paths_centers[i-1][j], self.weft_paths_centers[i][j]
+
+        if prev_pattern == curr_pattern:
+            raise ValueError("currently not supported, sorry!")
+    
+        warp_radius = self.warp_yarns[i].yarn_diameter/2
+        prev_weft_radius, current_weft_radius = self.weft_yarns[i-1].yarn_diameter/2, self.weft_yarns[i].yarn_diameter/2
+        
+        rA, rB = prev_weft_radius + warp_radius, current_weft_radius + warp_radius
+        forward = curr_weft_center - prev_weft_center
+        forward_norm = np.linalg.norm(forward)
+        theta = math.acos((rA +rB)/forward_norm)
+
+        print(f"prev_warp_center: {prev_weft_center}, curr_warp_center: {curr_weft_center}, forward: {forward}, rA, rB : {rA}, {rB}")
+
+        if prev_pattern == 1:
+            # warp under -> top
+            forward_angle = math.acos(-forward[2] / forward_norm) # angle between forward vector and (0,0,-1)
+        else:
+            # warp under -> top
+            forward_angle = math.acos(forward[2] / forward_norm) # angle between forward vector and (0,0,1)
+
+        circular_angle = math.pi - theta - forward_angle
+        
+        print(f"theta: {theta}, forward_angle: {forward_angle}, circular_angle: {circular_angle}")
+
+        compressed_circular_angle = circular_angle / self.compress_fractor 
+
+        # draw control points around the turning
+        segment = []
+        offset_angle = 0.01
+        compressed_circular_angle_slice = compressed_circular_angle / self.control_points_per_turning
+
+        if prev_pattern == 1:
+            # the half on previous warp
+            for i in range(self.control_points_per_turning):
+                point_angle = offset_angle + i * compressed_circular_angle_slice
+                segment_point = prev_weft_center + rA * np.array([ 0, math.sin(point_angle), math.cos(point_angle)])
+                segment.append(segment_point)
+
+                print(f"poin: {segment_point}")
+            
+            print("next half")
+            # the halp on the next warp
+            for i in range(self.control_points_per_turning):
+                point_angle = compressed_circular_angle + offset_angle - i * compressed_circular_angle_slice
+                segment_point = curr_weft_center + rB *  np.array([ 0, -math.sin(point_angle), -math.cos(point_angle)])
+                segment.append(segment_point)
+                print(f"point: {segment_point}")
+        else:
+            # the half on previous warp
+            for i in range(self.control_points_per_turning):
+                point_angle = offset_angle + i * compressed_circular_angle_slice
+                segment_point = prev_weft_center + rA *  np.array([ 0,math.sin(point_angle), -math.cos(point_angle)])
+                segment.append(segment_point)
+
+                print(f"poin: {segment_point}")
+            
+            print("next half")
+            # the halp on the next warp
+            for i in range(self.control_points_per_turning):
+                point_angle = compressed_circular_angle + offset_angle - i * compressed_circular_angle_slice
+                segment_point = curr_weft_center + rB *  np.array([ 0,-math.sin(point_angle), math.cos(point_angle)])
+                segment.append(segment_point)
+                print(f"point: {segment_point}")
+
+
+        return segment
 
                 
     # https://redblobgames.github.io/circular-obstacle-pathfinding/
@@ -194,28 +290,26 @@ class FabricSimulation:
                 segment.append(segment_point)
                 print(f"point: {segment_point}")
 
-
         return segment
 
+    # def __set_yarn_paths(self, target_paths_centers, target_yarns, direction):
+    #     """direction: [1,0,0] for weft, [0,0,1] for warp"""
+    #     for i in range(len(target_paths_centers)):
+    #         """for each weft yarn, append an start and an end, then set path"""
+    #         path_coord = target_paths_centers[i]
 
-    def __set_yarn_paths(self, target_paths_centers, target_yarns, direction):
-        """direction: [1,0,0] for weft, [0,0,1] for warp"""
-        for i in range(len(target_paths_centers)):
-            """for each weft yarn, append an start and an end, then set path"""
-            path_coord = target_paths_centers[i]
-
-            # start
-            first = path_coord[0]
-            start_len = 2* target_yarns[0].yarn_diameter
-            start = first - direction*start_len
+    #         # start
+    #         first = path_coord[0]
+    #         start_len = 2* target_yarns[0].yarn_diameter
+    #         start = first - direction*start_len
             
-            # end
-            last = path_coord[-1]
-            end_len = 2* target_yarns[-1].yarn_diameter
-            end = last + direction * end_len
+    #         # end
+    #         last = path_coord[-1]
+    #         end_len = 2* target_yarns[-1].yarn_diameter
+    #         end = last + direction * end_len
 
-            path = [start] + path_coord + [end]
-            target_yarns[i].set_yarn_path(path)
+    #         path = [start] + path_coord + [end]
+    #         target_yarns[i].set_yarn_path(path)
     
 
     def generate_obj_file(self, output_file):
