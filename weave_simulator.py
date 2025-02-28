@@ -7,12 +7,28 @@ from dataclasses import dataclass
 from yarn_simulatior import YarnSimulation
 import scipy.interpolate as interpolate
 
-import smooth_turning
-import multi_cloth
+from typing import List
 
-# TODO:
-# 1. compacted
-# 2. double cloth
+import smooth_turning
+import multi_cloth_manager
+
+
+@dataclass
+class FabricProperties:
+    weft_spacing_factor: float = 1
+    warp_spacing_factor: float = 1
+    control_points_per_turning: int = 8
+    compress_factor: float = 1.1
+
+@dataclass
+class FabricYarnSimulations:
+    weft_count: int
+    warp_count: int
+    pattern: np.array
+
+    weft_yarns: List[YarnSimulation]
+    warp_yarns: List[YarnSimulation]
+        
 
 class FabricSimulation:
 
@@ -26,63 +42,25 @@ class FabricSimulation:
         Weft yarns run along the X-axis (horizontal)
         Warp yarns run along the Y-axis (vertical)
         """
-        # Properties
-        self.weft_spacing_factor = 1     # packedness between weft yarns, 1 to inf
-        self.warp_spacing_factor = 1     # packedness between warp yarns, 1 for exactly spaced without compression
-        self.control_points_per_turning = 8   # smoothness of turning
-        self.compress_fractor = 1.1
-         
-        # Components
-        self.pattern = np.array(pattern_data, dtype=int)
-        self.weft_count = len(self.pattern)
-        self.warp_count = len(self.pattern[0]) if self.weft_count > 0 else 0
 
-        # yarn information 
-        self.weft_yarns = weft_yarns
-        self.warp_yarns = warp_yarns
+        self.fabricProperties = FabricProperties()
+        
+        self.fabricYarnSimulations = FabricYarnSimulations()
 
-        # intersections
+        # intersection points
         self.control_grid = None
 
-        # paths points
+        # path centers
+        self.weft_paths_centers = None
+        self.warp_paths_centers = None
+
+        # paths
         self.weft_paths = None
         self.warp_paths = None
 
-    # def __is_full_single_cloth(self, pattern):
-    #     for i in range(i, len(pattern)):
-    #         if pattern[i] == pattern[i-1]:
-    #             return False
-    #     return True 
-
-    # def __get_weft_centers_yz(self, max_warp_diameter):
-
-
-    #     unique_heights = set()
-    #     for i in range(self.weft_count):
-    #         # height = sum(1)
-    #         height = - sum(self.pattern[i])
-    #         # print(f"weft {i}, height: {height}")
-    #         if height not in unique_heights: unique_heights.add(height)
-
-    #     # sort and reset
-    #     sorted_unique_heights = sorted([unique_heights])
-
-    #     unique_heights_count = len(sorted_unique_heights)
-    #     print(f"unique_heights_count: {unique_heights_count}")
-    #     if unique_heights_count == 1:
-    #         weft_centers_yz = [(0,0)]
-    #         for i in range(self.weft_count-1):
-    #             next_center_y = weft_centers_yz[-1][0] + (self.weft_yarns[i].yarn_diameter/2 + max_warp_diameter + 
-    #                                             self.weft_yarns[i+1].yarn_diameter/2) * self.weft_spacing_factor
-
-    #             weft_centers_yz.append((next_center_y, 0))
-    #         return weft_centers_yz
-        
-    #     # reassign y
-    #     # height_to_cloth_label = {}
 
     def generate_warp_centers_x(self):
-        # positions of warp yarns along x-axis
+        """positions of warp yarns on the x axis. not changing with weaving patterns"""
 
         max_weft_diameter = 0
         for yarn in self.weft_yarns:
@@ -121,7 +99,9 @@ class FabricSimulation:
                     weft_z = -(weft_radius + warp_radius) * weft_tension_inverse_frac
                     warp_z = (weft_radius + warp_radius) * warp_tension_inverse_frac
 
-                self.weft_paths_centers[i][j], self.warp_paths_centers[j][i] = np.array([x,y,weft_z]), np.array([x, y, warp_z])
+                self.weft_paths_centers[i][j] = self.control_grid[i][j] + np.array([0,0, weft_z]) 
+                self.warp_paths_centers[j][i] = self.control_grid[i][j] + np.array([0,0, warp_z])
+
 
         self.weft_paths, self.warp_paths = smooth_turning.smoothen_and_set_paths(self)
         for i in range(self.weft_count):
@@ -220,6 +200,7 @@ class FabricSimulation:
             
             # weft
             for i in range(self.weft_count):
+                print(f"generating weft {i}")
                 yarn = self.weft_yarns[i]
             
                 # generate obj
@@ -234,6 +215,7 @@ class FabricSimulation:
             
             # Process warp yarns
             for j in range(self.warp_count):
+                print(f"generating warp {j}")
                 yarn = self.warp_yarns[j]
                 
                 # Start a new object for this yarn
@@ -250,12 +232,37 @@ class FabricSimulation:
             
         
         return output_file
+
+    def __get_max_warp_diameter(self):
+        max_warp_diameter = 0
+        for yarn in self.warp_yarns:
+            max_warp_diameter = max(max_warp_diameter, yarn.yarn_diameter)
+        return max_warp_diameter
     
     def simulate_fabric(self):
         warp_centers_x = self.generate_warp_centers_x()
-        self.control_grid = multi_cloth.generate_path_centers(self.weft_count, self.warp_count, self.pattern, warp_centers_x, self.max_warp_diameter, self.weft_yarns)
-        self.__generate_yarn_paths_with_control_grid()
+        max_warp_diameter = self.__get_max_warp_diameter()
+        self.control_grid, self.weft_paths_centers, self.warp_paths_centers, self.weft_paths_warp, self.warp_paths_weft = multi_cloth_manager.generate_control_grid_and_yarn_paths(
+            self.weft_count, self.warp_count, self.pattern, warp_centers_x, max_warp_diameter, self.weft_yarns, self.warp_yarns, self.weft_spacing_factor)
+        # print(f"weft_paths_centers: {self.weft_paths_centers}, warp_paths_centers:{self.warp_paths_centers}")
+        
+        # print(f"weft_paths_warp: {self.weft_paths_warp}, warp_paths_weft: {self.warp_paths_weft}")
+        # self.weft_paths, self.warp_paths = smooth_turning.smoothen_and_set_paths(self)
+        # for i in range(self.weft_count):
+        #     if self.weft_paths[i]:
+        #         self.weft_yarns[i].set_yarn_path(self.weft_paths[i])
+        # for j in range(self.warp_count):
+        #     if self.warp_paths[i]:
+        #         self.warp_yarns[j].set_yarn_path(self.warp_paths[j])
 
+
+        self.weft_paths, self.warp_paths = self.weft_paths_centers, self.warp_paths_centers
+        for i in range(self.weft_count):
+            if self.weft_paths[i]:
+                self.weft_yarns[i].set_yarn_path(self.weft_paths[i])
+        for j in range(self.warp_count):
+            if self.warp_paths[i]:
+                self.warp_yarns[j].set_yarn_path(self.warp_paths[j])
 
         # self.__generate_control_grid_and_yarn_paths()
         print("Control grid and yarn paths generated.")
