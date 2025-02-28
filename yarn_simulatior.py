@@ -12,7 +12,7 @@ class YarnSimulation:
         self.strand_count = strand_count  # Number of fiber strands for yarn
         self.strand_diameter = strand_diameter  # Diameter of a strand
         self.color = color            # RGB color tuple
-        self.packing_density = 0.9    # How densely the strands are packed
+        self.packing_density = 1    # How densely the strands are packed
 
         # Twists per unit length
         if self.strand_count == 3:
