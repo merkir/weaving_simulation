@@ -338,6 +338,8 @@ class YarnSimulation:
             self: the YarnSimulation instance for method chaining
         """
 
+        print("ttttt")
+
         # Generate yarn path
         self.__generate_straight_yarn_path()
         
