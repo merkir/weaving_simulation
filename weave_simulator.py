@@ -129,8 +129,6 @@ def main():
         
         # Create simulator
         simulator = FabricSimulation(pattern, weft_yarns, warp_yarns)
-
-        print("ttttt")
         
         # Run simulation
         simulator.simulate_fabric()
